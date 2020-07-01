@@ -54,7 +54,8 @@ Options
         --rds                 Enable support for AWS RDS.
         --output=FILEPATH     Store running queries as CSV.
         --help                Show this help message and exit.
-        --debug               Enable debug mode for traceback tracking.
+        --log                 Write (or append) log to FILEPATH.
+        --debug               Enable debug mode for traceback tracking and debug log level.
         --no-db-size          Skip total size of DB.
         --min-duration        Don't display queries with smaller than specified
                               duration (in seconds).
