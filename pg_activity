@@ -353,6 +353,7 @@ def main():
                 (disp_procs, new_procs) = PGAUI.poll(interval, flag, indent,
                                                      procs, disp_procs)
                 if PGAUI.get_mode() != old_pgtop_mode:
+                    logger.debug("switching mode %s -> %s", old_pgtop_mode, PGAUI.get_mode())
                     indent = PGAUI.get_indent(flag)
                 if PGAUI.get_is_local():
                     delta_disk_io = PGAUI.data.get_global_io_counters()
