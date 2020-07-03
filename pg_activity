@@ -44,6 +44,7 @@ from pgactivity import UI
 
 
 PGTOP_VERSION = "1.6.1"
+logger = logging.getLogger("pg_activity")
 
 
 # Customized OptionParser
@@ -419,6 +420,7 @@ def main():
             "FATAL: Access denied, can't access system informations for PID %s"
             % (str(err),))
     except curses.error as err:
+        logger.exception("curses error occured")
         PGAUI.at_exit_curses()
         if debug:
             import traceback
