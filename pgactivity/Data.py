@@ -330,7 +330,7 @@ class Data:
         active_connections = int(ret['active_connections'])
         return active_connections
 
-    def pg_get_activities(self, duration_mode=1):
+    async def pg_get_activities(self, duration_mode=1):
         """
         Get activity from pg_stat_activity view.
         """
@@ -511,7 +511,7 @@ class Data:
 
         return ret
 
-    def pg_get_waiting(self, duration_mode=1):
+    async def pg_get_waiting(self, duration_mode=1):
         """
         Get waiting queries.
         """
@@ -583,7 +583,7 @@ class Data:
         ret = cur.fetchall()
         return ret
 
-    def pg_get_blocking(self, duration_mode=1):
+    async def pg_get_blocking(self, duration_mode=1):
         """
         Get blocking queries
         """

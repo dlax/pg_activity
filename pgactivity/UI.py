@@ -1178,27 +1178,27 @@ class UI:
                 self.verbose_mode = old_verbose_mode
                 return 0
 
-    def poll(self, interval, flag, indent, process = None, disp_proc = None):
+    async def poll(self, interval, flag, indent, process = None, disp_proc = None):
         """
         Wrapper around polling
         """
         if self.mode == 'activities':
-            return self.__poll_activities(
+            return await self.__poll_activities(
                 interval,
                 flag,
                 indent,
                 process,
                 disp_proc)
         elif self.mode == 'waiting' or self.mode == 'blocking':
-            return self.__poll_waiting_blocking(
+            return await self.__poll_waiting_blocking(
                 interval,
                 flag,
                 indent,
                 process,
                 disp_proc)
 
-    def __poll_activities(self, interval, flag, indent, process = None,
-                          disp_proc = None):
+    async def __poll_activities(self, interval, flag, indent, process = None,
+                                disp_proc = None):
         """
         Poll activities.
         """
@@ -1331,7 +1331,7 @@ class UI:
                 disp_proc)
 
         # poll postgresql activity
-        queries =  self.data.pg_get_activities(self.duration_mode)
+        queries = await self.data.pg_get_activities(self.duration_mode)
         self.pid = []
         if self.is_local:
             # get resource usage for each process
@@ -1489,8 +1489,8 @@ class UI:
         self.__check_pid_yank()
         return (disp_procs, new_procs)
 
-    def __poll_waiting_blocking(self, interval, flag, indent,
-                                process = None, disp_proc = None):
+    async def __poll_waiting_blocking(self, interval, flag, indent,
+                                      process = None, disp_proc = None):
         """
         Poll waiting or blocking queries
         """
@@ -1517,7 +1517,7 @@ class UI:
         if (k == curses.KEY_F1 or k == ord('1')):
             self.mode = 'activities'
             curses.flushinp()
-            queries = self.data.pg_get_activities(self.duration_mode)
+            queries = await self.data.pg_get_activities(self.duration_mode)
             procs = self.data.sys_get_proc(queries, self.is_local)
             return self.__poll_activities(0, flag, indent, procs)
         # Waiting queries
@@ -1601,9 +1601,9 @@ class UI:
 
         # poll postgresql activity
         if self.mode == 'waiting':
-            queries =  self.data.pg_get_waiting(self.duration_mode)
+            queries = await self.data.pg_get_waiting(self.duration_mode)
         else:
-            queries =  self.data.pg_get_blocking(self.duration_mode)
+            queries = await self.data.pg_get_blocking(self.duration_mode)
 
         new_procs = {}
         for query in queries:

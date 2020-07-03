@@ -27,6 +27,7 @@ SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
 from __future__ import print_function
 
+import asyncio
 import logging
 import os
 import sys
@@ -268,7 +269,7 @@ server activity monitoring.")
     return parser
 
 
-def main():
+async def main():
     """
     Main function
     """
@@ -322,12 +323,12 @@ def main():
         # top part
         interval = 0
         if PGAUI.get_mode() == 'activities':
-            queries = PGAUI.data.pg_get_activities()
+            queries = await PGAUI.data.pg_get_activities()
             procs = PGAUI.data.sys_get_proc(queries, PGAUI.get_is_local())
         elif PGAUI.get_mode() == 'waiting':
-            procs = PGAUI.data.pg_get_waiting()
+            procs = await PGAUI.data.pg_get_waiting()
         elif PGAUI.get_mode() == 'blocking':
-            procs = PGAUI.data.pg_get_blocking()
+            procs = await PGAUI.data.pg_get_blocking()
         # draw the flag
         flag = PGAUI.get_flag_from_options(options)
         # main loop
@@ -350,8 +351,9 @@ def main():
                 PGAUI.check_window_size()
                 old_pgtop_mode = PGAUI.get_mode()
                 # poll process
-                (disp_procs, new_procs) = PGAUI.poll(interval, flag, indent,
-                                                     procs, disp_procs)
+                (disp_procs, new_procs) = await PGAUI.poll(
+                    interval, flag, indent, procs, disp_procs
+                )
                 if PGAUI.get_mode() != old_pgtop_mode:
                     logger.debug("switching mode %s -> %s", old_pgtop_mode, PGAUI.get_mode())
                     indent = PGAUI.get_indent(flag)
@@ -486,4 +488,4 @@ if __name__ == '__main__':
     if os.name != 'posix':
         sys.exit("FATAL: Platform not supported.")
     signal.signal(signal.SIGTERM, PGAUI.signal_handler)
-    main()
+    asyncio.run(main())
