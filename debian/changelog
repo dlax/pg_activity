@@ -1,3 +1,9 @@
+pg-activity (2.0.0~a2-0dlb1-1) unstable; urgency=medium
+
+  * New upstream pre-release
+
+ -- Denis Laxalde <denis.laxalde@dalibo.com>  Fri, 11 Dec 2020 13:25:19 +0100
+
 pg-activity (1.6.2-1) unstable; urgency=medium
 
   * New upstream release
