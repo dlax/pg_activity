@@ -3,7 +3,7 @@ Section: utils
 Priority: optional
 Maintainer: Emmanuel Bouthenot <kolter@debian.org>
 Build-Depends:
-    debhelper-compat (= 13),
+    debhelper (>= 12),
     python3,
     python3-setuptools,
     dh-python

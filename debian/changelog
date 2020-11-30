@@ -1,3 +1,9 @@
+pg-activity (2.0.0~a2-0dlb1buster-1) buster; urgency=medium
+
+  * Build-Depends on debhelper >= 12
+
+ -- Denis Laxalde <denis.laxalde@dalibo.com>  Fri, 11 Dec 2020 13:27:06 +0100
+
 pg-activity (2.0.0~a2-0dlb1-1) unstable; urgency=medium
 
   * New upstream pre-release
