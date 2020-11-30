@@ -19,7 +19,6 @@ Depends:
     ${misc:Depends},
     ${python3:Depends},
     python3-psycopg2,
-    python3-psutil
 Description: Realtime PostgreSQL database server monitoring tool
  PgActivity is a curses-based realtime utility to display information from a
  running PostgreSQL database server.
