@@ -1,0 +1,2 @@
+version=4
+https://github.com/dalibo/pg_activity/tags .*/v?(\d[\d\.]+)\.tar\.gz
