@@ -74,7 +74,7 @@ def main(
             elif key == keys.EXIT:
                 break
             elif not ui.interactive() and key == keys.SPACE:
-                ui = ui.toggle_pause()
+                ui.toggle_pause()
             elif options.nodbsize and key == keys.REFRESH_DB_SIZE:
                 skip_sizes = False
             elif key is not None:
@@ -152,16 +152,18 @@ def main(
                     sort_key = handlers.sort_key_for(key, query_mode, flag)
                     if sort_key is not None:
                         changes["sort_key"] = sort_key
-                    ui = ui.evolve(**changes)
+                    ui.evolve(**changes)
 
             if in_help:
-                print(term.clear + term.home, end="")
-                views.help(
-                    term,
-                    __version__,
-                    is_local,
-                    lines_counter=views.line_counter(term.height),
-                )
+                # Only draw help screen once.
+                if key is not None:
+                    print(term.clear + term.home, end="")
+                    views.help(
+                        term,
+                        __version__,
+                        is_local,
+                        lines_counter=views.line_counter(term.height),
+                    )
 
             else:
                 pg_db_info = data.pg_get_db_info(
