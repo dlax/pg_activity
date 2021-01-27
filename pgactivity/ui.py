@@ -1,6 +1,4 @@
 import optparse
-import os
-import socket
 import time
 from typing import Dict, List, Optional, cast
 
@@ -8,36 +6,23 @@ import attr
 from blessed import Terminal
 
 from . import __version__, activities, handlers, keys, types, utils, views, widgets
-from .data import pg_connect
+from .data import Data
 
 
 def main(
+    term: Terminal,
+    data: Data,
+    host: types.Host,
     options: optparse.Values,
+    dsn: str,
     *,
-    term: Optional[Terminal] = None,
     render_header: bool = True,
     render_footer: bool = True,
     width: Optional[int] = None,
     wait_on_actions: Optional[float] = None,
 ) -> None:
-    data = pg_connect(
-        options,
-        password=os.environ.get("PGPASSWORD"),
-        service=os.environ.get("PGSERVICE"),
-        min_duration=options.minduration,
-    )
 
-    hostname = socket.gethostname()
     fs_blocksize = options.blocksize
-
-    host = types.Host(
-        data.pg_version,
-        hostname,
-        options.username,
-        options.host,
-        options.port,
-        options.dbname,
-    )
 
     is_local = data.pg_is_local() and data.pg_is_local_access()
 
@@ -55,9 +40,6 @@ def main(
         max_db_length=min(max(int(pg_db_info["max_length"]), 8), 16),
     )
 
-    if term is None:
-        # Used in tests.
-        term = Terminal()
     key, in_help = None, False
     sys_procs: Dict[int, types.SystemProcess] = {}
     pg_procs = types.SelectableProcesses([])
@@ -71,6 +53,7 @@ def main(
                 in_help = True
             elif in_help and key is not None:
                 in_help, key = False, None
+                print(term.clear + term.home, end="")
             elif key == keys.EXIT:
                 break
             elif not ui.interactive() and key == keys.SPACE:
@@ -234,6 +217,7 @@ def main(
                     ui,
                     host=host,
                     dbinfo=dbinfo,
+                    pg_version=data.pg_version,
                     tps=tps,
                     active_connections=active_connections,
                     activity_stats=activity_stats,

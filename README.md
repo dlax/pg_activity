@@ -5,6 +5,8 @@ Command line tool for PostgreSQL server activity monitoring.
 [![Latest PyPI version](https://img.shields.io/pypi/v/pg_activity.svg)](https://pypi.python.org/pypi/pg_activity)
 [![Build Status](https://travis-ci.com/dalibo/pg_activity.svg?branch=master)](https://travis-ci.com/dalibo/pg_activity)
 
+![pg_activity screenshot](https://raw.github.com/dalibo/pg_activity/master/docs/imgs/screenshot.png)
+
 Installation
 ------------
 
@@ -21,7 +23,7 @@ or directly from your Linux distribution, if available, e.g.:
 Usage
 -----
 
-`pg_activity` works localy or remotely. In local execution context, to obtain
+`pg_activity` works locally or remotely. In local execution context, to obtain
 sufficient rights to display system informations, the system user running
 `pg_activity` must be the same user running postgresql server (`postgres` by
 default), or have more rights like `root`. Otherwise, `pg_activity` can fallback
@@ -120,11 +122,6 @@ Navigation mode
 | `Space`    | Tag or untag the process                      |
 | `q`        | Quit                                          |
 | `Other`    | Back to activity                              |
-
-Screenshot
-----------
-
-![pg_activity screenshot](https://raw.github.com/julmon/pg_activity/master/docs/imgs/screenshot.png)
 
 FAQ
 ---

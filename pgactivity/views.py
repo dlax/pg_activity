@@ -1,6 +1,5 @@
 import functools
 import inspect
-import itertools
 from textwrap import dedent
 from typing import (
     Any,
@@ -44,7 +43,18 @@ from .types import (
 from . import colors, utils
 from .activities import sorted as sorted_processes
 
-line_counter = functools.partial(itertools.count, step=-1)
+
+class line_counter:
+    def __init__(self, start: int) -> None:
+        self.value = start
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self.value})"
+
+    def __next__(self) -> int:
+        current_value = self.value
+        self.value -= 1
+        return current_value
 
 
 def shorten(term: Terminal, text: str, width: Optional[int] = None) -> str:
@@ -69,7 +79,7 @@ def shorten(term: Terminal, text: str, width: Optional[int] = None) -> str:
     return wrapped[0] + term.normal  # type: ignore
 
 
-def limit(func: Callable[..., Iterable[str]]) -> Callable[..., int]:
+def limit(func: Callable[..., Iterable[str]]) -> Callable[..., None]:
     """View decorator handling screen height limit.
 
     >>> term = Terminal()
@@ -83,13 +93,13 @@ def limit(func: Callable[..., Iterable[str]]) -> Callable[..., int]:
     line #0
     line #1
     >>> count
-    count(0, -1)
+    line_counter(0)
     >>> count = line_counter(3)
     >>> limit(view)(term, 2, lines_counter=count)
     line #0
     line #1
     >>> count
-    count(1, -1)
+    line_counter(1)
     >>> limit(view)(term, 3, prefix="row")
     row #0
     row #1
@@ -101,7 +111,7 @@ def limit(func: Callable[..., Iterable[str]]) -> Callable[..., int]:
     line #0
     <--
     >>> count
-    count(9, -1)
+    line_counter(9)
     """
 
     @functools.wraps(func)
@@ -112,7 +122,7 @@ def limit(func: Callable[..., Iterable[str]]) -> Callable[..., int]:
         if "width" in signature.parameters:
             kwargs["width"] = width
         for line in func(term, *args, **kwargs):
-            print(shorten(term, line, width))
+            print(shorten(term, line, width) + term.clear_eol)
             if counter is not None and next(counter) == 1:
                 break
 
@@ -181,6 +191,7 @@ def header(
     *,
     host: Host,
     dbinfo: DBInfo,
+    pg_version: str,
     tps: int,
     active_connections: int,
     system_info: Optional[SystemInfo] = None,
@@ -190,7 +201,7 @@ def header(
     yield (
         " - ".join(
             [
-                host.pg_version,
+                pg_version,
                 f"{term.bold}{host.hostname}{term.normal}",
                 f"{term.cyan}{pg_host}{term.normal}",
                 f"Ref.: {ui.refresh_time}s",
@@ -390,9 +401,12 @@ def processes_rows(
                 else:
                     # Only wrap subsequent lines.
                     wrapped_lines = term.wrap(query, width=dif)
-                    query_lines = [wrapped_lines[0]] + term.wrap(
-                        " ".join(wrapped_lines[1:]), width=width
-                    )
+                    if wrapped_lines:
+                        query_lines = [wrapped_lines[0]] + term.wrap(
+                            " ".join(wrapped_lines[1:]), width=width
+                        )
+                    else:
+                        query_lines = []
                 query_value = "\n".join(query_lines)
             else:
                 assert (
@@ -468,6 +482,7 @@ def screen(
     *,
     host: Host,
     dbinfo: DBInfo,
+    pg_version: str,
     tps: int,
     active_connections: int,
     activity_stats: ActivityStats,
@@ -485,8 +500,8 @@ def screen(
         processes, system_info = activity_stats, None
     processes.set_items(sorted_processes(processes, key=ui.sort_key, reverse=True))
 
-    print(term.clear + term.home, end="")
-    top_height = term.height - 1
+    print(term.home, end="")
+    top_height = term.height - (1 if render_footer else 0)
     lines_counter = line_counter(top_height)
 
     if render_header:
@@ -495,6 +510,7 @@ def screen(
             ui,
             host=host,
             dbinfo=dbinfo,
+            pg_version=pg_version,
             tps=tps,
             active_connections=active_connections,
             system_info=system_info,
@@ -511,6 +527,10 @@ def screen(
         lines_counter=lines_counter,
         width=width,
     )
+
+    # Clear remaining lines in screen until footer (or EOS)
+    print(f"{term.clear_eol}\n" * lines_counter.value, end="")
+
     if render_footer:
         with term.location(x=0, y=top_height):
             if message is not None:

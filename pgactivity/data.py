@@ -112,6 +112,7 @@ class Data:
     pg_version: str
     pg_num_version: int
     min_duration: float
+    dsn_parameters: Dict[str, str]
 
     @classmethod
     def pg_connect(
@@ -125,6 +126,7 @@ class Data:
         database: str = "postgres",
         rds_mode: bool = False,
         service: Optional[str] = None,
+        dsn: str = "",
     ) -> "Data":
         """Create an instance by connecting to a PostgreSQL server."""
         pg_conn = None
@@ -134,6 +136,11 @@ class Data:
                 if service is not None:
                     pg_conn = psycopg2.connect(
                         service=service,
+                        cursor_factory=psycopg2.extras.DictCursor,
+                    )
+                elif dsn:
+                    pg_conn = psycopg2.connect(
+                        dsn=dsn,
                         cursor_factory=psycopg2.extras.DictCursor,
                     )
                 else:
@@ -153,6 +160,11 @@ class Data:
                     service=service,
                     cursor_factory=psycopg2.extras.DictCursor,
                 )
+            elif dsn:
+                pg_conn = psycopg2.connect(
+                    dsn=dsn,
+                    cursor_factory=psycopg2.extras.DictCursor,
+                )
             else:
                 pg_conn = psycopg2.connect(
                     database=database,
@@ -170,7 +182,25 @@ class Data:
             if ret[0] != "on":
                 raise Exception("Must be run with database superuser privileges.")
         pg_version, pg_num_version = pg_get_num_version(pg_get_version(pg_conn))
-        return cls(pg_conn, pg_version, pg_num_version, min_duration=min_duration)
+        return cls(
+            pg_conn,
+            pg_version,
+            pg_num_version,
+            min_duration=min_duration,
+            dsn_parameters=pg_conn.info.dsn_parameters,
+        )
+
+    def try_reconnect(self) -> Optional["Data"]:
+        try:
+            pg_conn = psycopg2.connect(
+                cursor_factory=psycopg2.extras.DictCursor, **self.dsn_parameters
+            )
+        except (psycopg2.InterfaceError, psycopg2.OperationalError):
+            return None
+        else:
+            return attr.evolve(
+                self, pg_conn=pg_conn, dsn_parameters=pg_conn.info.dsn_parameters
+            )
 
     def pg_is_local_access(self) -> bool:
         """
@@ -260,14 +290,17 @@ class Data:
         tps = 0
         size_ev = 0.0
         if prev_db_infos is not None:
-            tps = int(
-                (ret["no_xact"] - prev_db_infos["no_xact"])
-                / (ret["timestamp"] - prev_db_infos["timestamp"])
-            )
-            size_ev = float(
-                float(ret["total_size"] - prev_db_infos["total_size"])
-                / (ret["timestamp"] - prev_db_infos["timestamp"])
-            )
+            try:
+                tps = int(
+                    (ret["no_xact"] - prev_db_infos["no_xact"])
+                    / (ret["timestamp"] - prev_db_infos["timestamp"])
+                )
+                size_ev = float(
+                    float(ret["total_size"] - prev_db_infos["total_size"])
+                    / (ret["timestamp"] - prev_db_infos["timestamp"])
+                )
+            except ZeroDivisionError:
+                pass
         return {
             "timestamp": ret["timestamp"],
             "no_xact": ret["no_xact"],
@@ -850,6 +883,7 @@ class Data:
 
 def pg_connect(
     options: optparse.Values,
+    dsn: str,
     password: Optional[str] = None,
     service: Optional[str] = None,
     exit_on_failed: bool = True,
@@ -859,6 +893,7 @@ def pg_connect(
     for nb_try in range(2):
         try:
             data = Data.pg_connect(
+                dsn=dsn,
                 host=options.host,
                 port=options.port,
                 user=options.username,
