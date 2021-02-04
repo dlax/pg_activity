@@ -34,7 +34,7 @@ from optparse import OptionParser, OptionGroup
 from typing import NoReturn
 
 from blessed import Terminal
-from psycopg2.errors import OperationalError
+from psycopg3.errors import OperationalError
 
 from pgactivity import __version__, data, types, ui
 

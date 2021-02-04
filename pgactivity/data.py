@@ -30,21 +30,21 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import attr
 import psutil
-import psycopg2
-from psycopg2.errors import Error, InterfaceError, InvalidPassword, OperationalError
-from psycopg2.extensions import connection
+import psycopg3
+from psycopg3.errors import Error, InterfaceError, InvalidPassword, OperationalError
+from psycopg3.connection import Connection
 
 from . import queries
 from .types import BWProcess, RunningProcess
 from .utils import clean_str
 
 
-def pg_get_version(pg_conn: connection) -> str:
+def pg_get_version(pg_conn: Connection) -> str:
     """Get PostgreSQL server version."""
     query = queries.get("get_version")
     with pg_conn.cursor() as cur:
         cur.execute(query)
-        ret: Tuple[str] = cur.fetchone()
+        ret: Tuple[str] = cur.fetchone()  # type: ignore
     return ret[0]
 
 
@@ -108,7 +108,7 @@ def pg_get_num_dev_version(text_version: str) -> Tuple[str, int]:
 
 @attr.s(auto_attribs=True, frozen=True, slots=True)
 class Data:
-    pg_conn: connection
+    pg_conn: Connection
     pg_version: str
     pg_num_version: int
     min_duration: float
@@ -134,14 +134,16 @@ class Data:
             # try to connect using UNIX socket
             try:
                 if service is not None:
-                    pg_conn = psycopg2.connect(
+                    pg_conn = psycopg3.connect(
+                        autocommit=True,
                         service=service,
                     )
                 elif dsn:
-                    pg_conn = psycopg2.connect(dsn)
+                    pg_conn = psycopg3.connect(dsn, autocommit=True)
                 else:
-                    pg_conn = psycopg2.connect(
-                        database=database,
+                    pg_conn = psycopg3.connect(
+                        autocommit=True,
+                        dbname=database,
                         user=user,
                         port=port,
                         password=password,
@@ -151,44 +153,46 @@ class Data:
                     raise psy_err
         if pg_conn is None:  # fallback on TCP/IP connection
             if service is not None:
-                pg_conn = psycopg2.connect(
+                pg_conn = psycopg3.connect(
+                    autocommit=True,
                     service=service,
                 )
             elif dsn:
-                pg_conn = psycopg2.connect(dsn)
+                pg_conn = psycopg3.connect(dsn, autocommit=True)
             else:
-                pg_conn = psycopg2.connect(
-                    database=database,
+                pg_conn = psycopg3.connect(
+                    autocommit=True,
+                    dbname=database,
                     host=host,
                     port=port,
                     user=user,
                     password=password,
                 )
-        pg_conn.autocommit = True
         if not rds_mode:  # Make sure we are using superuser if not on RDS
             with pg_conn.cursor() as cur:
                 cur.execute(queries.get("is_superuser"))
                 ret = cur.fetchone()
+            assert ret
             if ret[0] != "on":
                 raise Exception("Must be run with database superuser privileges.")
+
         pg_version, pg_num_version = pg_get_num_version(pg_get_version(pg_conn))
         return cls(
             pg_conn,
             pg_version,
             pg_num_version,
             min_duration=min_duration,
-            dsn_parameters=pg_conn.info.dsn_parameters,
+            dsn_parameters=pg_conn.info.get_parameters(),
         )
 
     def try_reconnect(self) -> Optional["Data"]:
         try:
-            pg_conn = psycopg2.connect(**self.dsn_parameters)
+            pg_conn = psycopg3.connect(autocommit=True, **self.dsn_parameters)
         except (InterfaceError, OperationalError):
             return None
         else:
-            pg_conn.autocommit = True
             return attr.evolve(
-                self, pg_conn=pg_conn, dsn_parameters=pg_conn.info.dsn_parameters
+                self, pg_conn=pg_conn, dsn_parameters=pg_conn.info.get_parameters()
             )
 
     def pg_is_local_access(self) -> bool:
@@ -200,7 +204,7 @@ class Data:
             query = queries.get("get_pid_file")
             with self.pg_conn.cursor() as cur:
                 cur.execute(query)
-                (pid_file,) = cur.fetchone()
+                (pid_file,) = cur.fetchone()  # type: ignore
             with open(pid_file, "r") as fd:
                 pid = fd.readlines()[0].strip()
                 try:
@@ -222,7 +226,7 @@ class Data:
         query = queries.get("do_pg_cancel_backend")
         with self.pg_conn.cursor() as cur:
             cur.execute(query, {"pid": pid})
-            (is_stopped,) = cur.fetchone()
+            (is_stopped,) = cur.fetchone()  # type: ignore
         return bool(is_stopped)
 
     def pg_terminate_backend(self, pid: int) -> bool:
@@ -235,7 +239,7 @@ class Data:
             query = queries.get("do_pg_cancel_backend")
         with self.pg_conn.cursor() as cur:
             cur.execute(query, {"pid": pid})
-            (is_stopped,) = cur.fetchone()
+            (is_stopped,) = cur.fetchone()  # type: ignore
         return bool(is_stopped)
 
     DbInfoDict = Dict[str, Union[str, int, float]]
@@ -263,7 +267,7 @@ class Data:
                     "using_rds": using_rds,
                 },
             )
-            timestamp, no_xact, total_size, max_length = cur.fetchone()
+            timestamp, no_xact, total_size, max_length = cur.fetchone()  # type: ignore
         tps = 0
         size_ev = 0.0
         if prev_db_infos is not None:
@@ -299,7 +303,7 @@ class Data:
 
         with self.pg_conn.cursor() as cur:
             cur.execute(query)
-            (active_connections,) = cur.fetchone()
+            (active_connections,) = cur.fetchone()  # type: ignore
         return int(active_connections)
 
     def pg_get_activities(self, duration_mode: int = 1) -> List[RunningProcess]:
@@ -367,7 +371,7 @@ class Data:
         query = queries.get("get_pga_inet_addresses")
         with self.pg_conn.cursor() as cur:
             cur.execute(query)
-            inet_server_addr, inet_client_addr = cur.fetchone()
+            inet_server_addr, inet_client_addr = cur.fetchone()  # type: ignore
         if inet_server_addr == inet_client_addr:
             return True
         return False
