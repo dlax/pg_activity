@@ -8,9 +8,9 @@ SELECT
           THEN 'local'
           ELSE pg_stat_activity.client_addr::TEXT
       END AS client,
+      pg_locks.relation::regclass AS relation,
       pg_locks.mode AS mode,
       pg_locks.locktype AS type,
-      pg_locks.relation::regclass AS relation,
       EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
       CASE
           WHEN pg_stat_activity.current_query = '<IDLE> in transaction (aborted)' THEN 'idle in transaction (aborted)'
