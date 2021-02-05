@@ -31,7 +31,6 @@ from typing import Dict, List, Optional, Tuple, Union
 import attr
 import psutil
 import psycopg2
-import psycopg2.extras
 from psycopg2.errors import Error, InterfaceError, InvalidPassword, OperationalError
 from psycopg2.extensions import connection
 
@@ -45,8 +44,8 @@ def pg_get_version(pg_conn: connection) -> str:
     query = queries.get("get_version")
     with pg_conn.cursor() as cur:
         cur.execute(query)
-        ret: Dict[str, str] = cur.fetchone()
-    return ret["pg_version"]
+        ret: Tuple[str] = cur.fetchone()
+    return ret[0]
 
 
 def pg_get_num_version(text_version: str) -> Tuple[str, int]:
@@ -137,20 +136,15 @@ class Data:
                 if service is not None:
                     pg_conn = psycopg2.connect(
                         service=service,
-                        cursor_factory=psycopg2.extras.DictCursor,
                     )
                 elif dsn:
-                    pg_conn = psycopg2.connect(
-                        dsn,
-                        cursor_factory=psycopg2.extras.DictCursor,
-                    )
+                    pg_conn = psycopg2.connect(dsn)
                 else:
                     pg_conn = psycopg2.connect(
                         database=database,
                         user=user,
                         port=port,
                         password=password,
-                        cursor_factory=psycopg2.extras.DictCursor,
                     )
             except Error as psy_err:
                 if host is None:
@@ -159,13 +153,9 @@ class Data:
             if service is not None:
                 pg_conn = psycopg2.connect(
                     service=service,
-                    cursor_factory=psycopg2.extras.DictCursor,
                 )
             elif dsn:
-                pg_conn = psycopg2.connect(
-                    dsn,
-                    cursor_factory=psycopg2.extras.DictCursor,
-                )
+                pg_conn = psycopg2.connect(dsn)
             else:
                 pg_conn = psycopg2.connect(
                     database=database,
@@ -173,7 +163,6 @@ class Data:
                     port=port,
                     user=user,
                     password=password,
-                    cursor_factory=psycopg2.extras.DictCursor,
                 )
         pg_conn.autocommit = True
         if not rds_mode:  # Make sure we are using superuser if not on RDS
@@ -193,9 +182,7 @@ class Data:
 
     def try_reconnect(self) -> Optional["Data"]:
         try:
-            pg_conn = psycopg2.connect(
-                cursor_factory=psycopg2.extras.DictCursor, **self.dsn_parameters
-            )
+            pg_conn = psycopg2.connect(**self.dsn_parameters)
         except (InterfaceError, OperationalError):
             return None
         else:
@@ -213,8 +200,7 @@ class Data:
             query = queries.get("get_pid_file")
             with self.pg_conn.cursor() as cur:
                 cur.execute(query)
-                ret = cur.fetchone()
-            pid_file = ret["pid_file"]
+                (pid_file,) = cur.fetchone()
             with open(pid_file, "r") as fd:
                 pid = fd.readlines()[0].strip()
                 try:
@@ -236,8 +222,8 @@ class Data:
         query = queries.get("do_pg_cancel_backend")
         with self.pg_conn.cursor() as cur:
             cur.execute(query, {"pid": pid})
-            ret: Dict[str, bool] = cur.fetchone()
-        return ret["is_stopped"]
+            (is_stopped,) = cur.fetchone()
+        return bool(is_stopped)
 
     def pg_terminate_backend(self, pid: int) -> bool:
         """
@@ -249,8 +235,8 @@ class Data:
             query = queries.get("do_pg_cancel_backend")
         with self.pg_conn.cursor() as cur:
             cur.execute(query, {"pid": pid})
-            ret: Dict[str, bool] = cur.fetchone()
-        return ret["is_stopped"]
+            (is_stopped,) = cur.fetchone()
+        return bool(is_stopped)
 
     DbInfoDict = Dict[str, Union[str, int, float]]
 
@@ -277,26 +263,26 @@ class Data:
                     "using_rds": using_rds,
                 },
             )
-            ret = cur.fetchone()
+            timestamp, no_xact, total_size, max_length = cur.fetchone()
         tps = 0
         size_ev = 0.0
         if prev_db_infos is not None:
             try:
                 tps = int(
-                    (ret["no_xact"] - prev_db_infos["no_xact"])
-                    / (ret["timestamp"] - prev_db_infos["timestamp"])
+                    (no_xact - prev_db_infos["no_xact"])
+                    / (timestamp - prev_db_infos["timestamp"])
                 )
                 size_ev = float(
-                    float(ret["total_size"] - prev_db_infos["total_size"])
-                    / (ret["timestamp"] - prev_db_infos["timestamp"])
+                    float(total_size - prev_db_infos["total_size"])
+                    / (timestamp - prev_db_infos["timestamp"])
                 )
             except ZeroDivisionError:
                 pass
         return {
-            "timestamp": ret["timestamp"],
-            "no_xact": ret["no_xact"],
-            "total_size": ret["total_size"],
-            "max_length": ret["max_length"],
+            "timestamp": timestamp,
+            "no_xact": no_xact,
+            "total_size": total_size,
+            "max_length": max_length,
             "tps": tps,
             "size_ev": size_ev,
         }
@@ -313,9 +299,8 @@ class Data:
 
         with self.pg_conn.cursor() as cur:
             cur.execute(query)
-            ret = cur.fetchone()
-        active_connections = int(ret["active_connections"])
-        return active_connections
+            (active_connections,) = cur.fetchone()
+        return int(active_connections)
 
     def pg_get_activities(self, duration_mode: int = 1) -> List[RunningProcess]:
         """
@@ -337,9 +322,9 @@ class Data:
 
         with self.pg_conn.cursor() as cur:
             cur.execute(query, {"min_duration": self.min_duration})
-            ret = cur.fetchall()
+            rows = cur.fetchall()
 
-        return [RunningProcess(**row) for row in ret]
+        return [RunningProcess.from_row(*row) for row in rows]
 
     def pg_get_waiting(self, duration_mode: int = 1) -> List[BWProcess]:
         """
@@ -355,8 +340,8 @@ class Data:
 
         with self.pg_conn.cursor() as cur:
             cur.execute(query, {"min_duration": self.min_duration})
-            ret = cur.fetchall()
-        return [BWProcess(**row) for row in ret]
+            rows = cur.fetchall()
+        return [BWProcess.from_row(*row) for row in rows]
 
     def pg_get_blocking(self, duration_mode: int = 1) -> List[BWProcess]:
         """
@@ -372,8 +357,8 @@ class Data:
 
         with self.pg_conn.cursor() as cur:
             cur.execute(query, {"min_duration": self.min_duration})
-            ret = cur.fetchall()
-        return [BWProcess(**row) for row in ret]
+            rows = cur.fetchall()
+        return [BWProcess.from_row(*row) for row in rows]
 
     def pg_is_local(self) -> bool:
         """
@@ -382,8 +367,8 @@ class Data:
         query = queries.get("get_pga_inet_addresses")
         with self.pg_conn.cursor() as cur:
             cur.execute(query)
-            ret = cur.fetchone()
-        if ret["inet_server_addr"] == ret["inet_client_addr"]:
+            inet_server_addr, inet_client_addr = cur.fetchone()
+        if inet_server_addr == inet_client_addr:
             return True
         return False
 

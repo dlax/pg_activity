@@ -819,6 +819,33 @@ class RunningProcess(BaseProcess, Deserializable):
     wait: bool
     is_parallel_worker: bool
 
+    @classmethod
+    def from_row(
+        cls,
+        pid: int,
+        application_name: str,
+        database: str,
+        client: str,
+        duration: Optional[float],
+        wait: bool,
+        user: str,
+        state: str,
+        query: str,
+        is_parallel_worker: bool,
+    ) -> "RunningProcess":
+        return cls(
+            pid=pid,
+            application_name=application_name,
+            database=database,
+            client=client,
+            duration=duration,
+            wait=wait,
+            user=user,
+            state=state,
+            query=query,
+            is_parallel_worker=is_parallel_worker,
+        )
+
 
 @attr.s(auto_attribs=True, frozen=True, slots=True)
 class BWProcess(BaseProcess):
@@ -832,6 +859,35 @@ class BWProcess(BaseProcess):
 
     # TODO: update queries to select/compute this column.
     is_parallel_worker: bool = attr.ib(default=False, init=False)
+
+    @classmethod
+    def from_row(
+        cls,
+        pid: int,
+        application_name: str,
+        database: str,
+        user: str,
+        client: str,
+        relation: str,
+        mode: str,
+        type: str,
+        duration: Optional[float],
+        state: str,
+        query: str,
+    ) -> "BWProcess":
+        return cls(
+            pid=pid,
+            application_name=application_name,
+            database=database,
+            user=user,
+            client=client,
+            mode=mode,
+            type=type,
+            relation=relation,
+            duration=duration,
+            state=state,
+            query=query,
+        )
 
 
 @attr.s(auto_attribs=True, frozen=True, slots=True)
