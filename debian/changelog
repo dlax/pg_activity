@@ -1,4 +1,10 @@
-pg-activity (2.0.3-0dlb1buster-1) buster; urgency=medium
+pg-activity (2.1.0~dlb1deb10-1) buster; urgency=medium
+
+  * New upstream release.
+
+ -- Denis Laxalde <denis.laxalde@dalibo.com>  Mon, 08 Mar 2021 16:24:49 +0100
+
+pg-activity (2.0.3-0dlb1-1) buster; urgency=medium
 
   * New upstream release.
 

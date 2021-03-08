@@ -32,19 +32,20 @@ import attr
 import psutil
 import psycopg2
 import psycopg2.extras
-from psycopg2 import errorcodes
+from psycopg2.errors import InterfaceError, InvalidPassword, OperationalError
 from psycopg2.extensions import connection
 
+from . import queries
 from .types import BWProcess, RunningProcess
 from .utils import clean_str
 
 
 def pg_get_version(pg_conn: connection) -> str:
     """Get PostgreSQL server version."""
-    query = "SELECT version() AS pg_version"
-    cur = pg_conn.cursor()
-    cur.execute(query)
-    ret: Dict[str, str] = cur.fetchone()
+    query = queries.get("get_version")
+    with pg_conn.cursor() as cur:
+        cur.execute(query)
+        ret: Dict[str, str] = cur.fetchone()
     return ret["pg_version"]
 
 
@@ -56,8 +57,16 @@ def pg_get_num_version(text_version: str) -> Tuple[str, int]:
     ('PostgreSQL 11.9', 110900)
     >>> pg_get_num_version('EnterpriseDB 11.9 (Debian 11.9-0+deb10u1)')
     ('EnterpriseDB 11.9', 110900)
-    >>> pg_get_num_version("PostgreSQL 13.0beta2")
-    ('PostgreSQL 13.0', 130000)
+    >>> pg_get_num_version("PostgreSQL 9.3.24 on x86_64-pc-linux-gnu (Debian 9.3.24-1.pgdg80+1), compiled by gcc (Debian 4.9.2-10+deb8u1) 4.9.2, 64-bit")
+    ('PostgreSQL 9.3.24', 90324)
+    >>> pg_get_num_version("PostgreSQL 9.1.24 on x86_64-unknown-linux-gnu, compiled by gcc (GCC) 4.8.5 20150623 (Red Hat 4.8.5-39), 64-bit")
+    ('PostgreSQL 9.1.24', 90124)
+    >>> pg_get_num_dev_version("PostgreSQL 14devel on x86_64-pc-linux-gnu, compiled by gcc (GCC) 9.3.1 20200408 (Red Hat 9.3.1-2), 64-bit")
+    ('PostgreSQL 14devel', 140000)
+    >>> pg_get_num_version("PostgreSQL 13beta1 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 9.3.1 20200408 (Red Hat 9.3.1-2), 64-bit")
+    ('PostgreSQL 13beta1', 130000)
+    >>> pg_get_num_version("PostgreSQL 13rc1 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 9.3.1 20200408 (Red Hat 9.3.1-2), 64-bit")
+    ('PostgreSQL 13rc1', 130000)
     """
     res = re.match(
         r"^(PostgreSQL|EnterpriseDB) ([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
@@ -84,8 +93,12 @@ def pg_get_num_dev_version(text_version: str) -> Tuple[str, int]:
     """Return PostgreSQL short & numeric devel. or beta version from a string
     (SELECT version()).
 
-    >>> pg_get_num_dev_version("PostgreSQL 11.9devel0")
-    ('PostgreSQL 11.9devel', 110900)
+    >>> pg_get_num_dev_version("PostgreSQL 14devel on x86_64-pc-linux-gnu, compiled by gcc (GCC) 9.3.1 20200408 (Red Hat 9.3.1-2), 64-bit")
+    ('PostgreSQL 14devel', 140000)
+    >>> pg_get_num_version("PostgreSQL 13beta1 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 9.3.1 20200408 (Red Hat 9.3.1-2), 64-bit")
+    ('PostgreSQL 13beta1', 130000)
+    >>> pg_get_num_version("PostgreSQL 13rc1 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 9.3.1 20200408 (Red Hat 9.3.1-2), 64-bit")
+    ('PostgreSQL 13rc1', 130000)
     """
     res = re.match(
         r"^(PostgreSQL|EnterpriseDB) ([0-9]+)(?:\.([0-9]+))?(devel|beta[0-9]+|rc[0-9]+)",
@@ -125,62 +138,31 @@ class Data:
         password: Optional[str] = None,
         database: str = "postgres",
         rds_mode: bool = False,
-        service: Optional[str] = None,
         dsn: str = "",
+        hide_queries_in_logs: bool = False,
     ) -> "Data":
         """Create an instance by connecting to a PostgreSQL server."""
-        pg_conn = None
-        if host is None or host == "localhost":
-            # try to connect using UNIX socket
-            try:
-                if service is not None:
-                    pg_conn = psycopg2.connect(
-                        service=service,
-                        cursor_factory=psycopg2.extras.DictCursor,
-                    )
-                elif dsn:
-                    pg_conn = psycopg2.connect(
-                        dsn=dsn,
-                        cursor_factory=psycopg2.extras.DictCursor,
-                    )
-                else:
-                    pg_conn = psycopg2.connect(
-                        database=database,
-                        user=user,
-                        port=port,
-                        password=password,
-                        cursor_factory=psycopg2.extras.DictCursor,
-                    )
-            except psycopg2.Error as psy_err:
-                if host is None:
-                    raise psy_err
-        if pg_conn is None:  # fallback on TCP/IP connection
-            if service is not None:
-                pg_conn = psycopg2.connect(
-                    service=service,
-                    cursor_factory=psycopg2.extras.DictCursor,
-                )
-            elif dsn:
-                pg_conn = psycopg2.connect(
-                    dsn=dsn,
-                    cursor_factory=psycopg2.extras.DictCursor,
-                )
-            else:
-                pg_conn = psycopg2.connect(
-                    database=database,
-                    host=host,
-                    port=port,
-                    user=user,
-                    password=password,
-                    cursor_factory=psycopg2.extras.DictCursor,
-                )
-        pg_conn.set_isolation_level(0)
-        if not rds_mode:  # Make sure we are using superuser if not on RDS
-            cur = pg_conn.cursor()
-            cur.execute("SELECT current_setting('is_superuser')")
-            ret = cur.fetchone()
-            if ret[0] != "on":
-                raise Exception("Must be run with database superuser privileges.")
+        pg_conn = psycopg2.connect(
+            dsn=dsn,
+            host=host,
+            port=port,
+            user=user,
+            database=database,
+            password=password,
+            application_name="pg_activity",
+            cursor_factory=psycopg2.extras.DictCursor,
+        )
+        pg_conn.autocommit = True
+        with pg_conn.cursor() as cur:
+            if hide_queries_in_logs:
+                cur.execute(queries.get("disable_log_min_duration_statement"))
+                if pg_conn.server_version >= 130000:
+                    cur.execute(queries.get("disable_log_min_duration_sample"))
+            if not rds_mode:  # Make sure we are using superuser if not on RDS
+                cur.execute(queries.get("is_superuser"))
+                ret = cur.fetchone()
+                if ret[0] != "on":
+                    raise Exception("Must be run with database superuser privileges.")
         pg_version, pg_num_version = pg_get_num_version(pg_get_version(pg_conn))
         return cls(
             pg_conn,
@@ -195,9 +177,10 @@ class Data:
             pg_conn = psycopg2.connect(
                 cursor_factory=psycopg2.extras.DictCursor, **self.dsn_parameters
             )
-        except (psycopg2.InterfaceError, psycopg2.OperationalError):
+        except (InterfaceError, OperationalError):
             return None
         else:
+            pg_conn.autocommit = True
             return attr.evolve(
                 self, pg_conn=pg_conn, dsn_parameters=pg_conn.info.dsn_parameters
             )
@@ -208,10 +191,10 @@ class Data:
         system informations for the postmaster process.
         """
         try:
-            query = "SELECT setting||'/postmaster.pid' AS pid_file FROM pg_settings WHERE name = 'data_directory'"
-            cur = self.pg_conn.cursor()
-            cur.execute(query)
-            ret = cur.fetchone()
+            query = queries.get("get_pid_file")
+            with self.pg_conn.cursor() as cur:
+                cur.execute(query)
+                ret = cur.fetchone()
             pid_file = ret["pid_file"]
             with open(pid_file, "r") as fd:
                 pid = fd.readlines()[0].strip()
@@ -231,24 +214,24 @@ class Data:
         """
         Cancel a backend
         """
-        query = "SELECT pg_cancel_backend(%s) AS cancelled"
-        cur = self.pg_conn.cursor()
-        cur.execute(query, (pid,))
-        ret: Dict[str, bool] = cur.fetchone()
-        return ret["cancelled"]
+        query = queries.get("do_pg_cancel_backend")
+        with self.pg_conn.cursor() as cur:
+            cur.execute(query, {"pid": pid})
+            ret: Dict[str, bool] = cur.fetchone()
+        return ret["is_stopped"]
 
     def pg_terminate_backend(self, pid: int) -> bool:
         """
         Terminate a backend
         """
         if self.pg_num_version >= 80400:
-            query = "SELECT pg_terminate_backend(%s) AS terminated"
+            query = queries.get("do_pg_terminate_backend")
         else:
-            query = "SELECT pg_cancel_backend(%s) AS terminated"
-        cur = self.pg_conn.cursor()
-        cur.execute(query, (pid,))
-        ret: Dict[str, bool] = cur.fetchone()
-        return ret["terminated"]
+            query = queries.get("do_pg_cancel_backend")
+        with self.pg_conn.cursor() as cur:
+            cur.execute(query, {"pid": pid})
+            ret: Dict[str, bool] = cur.fetchone()
+        return ret["is_stopped"]
 
     DbInfoDict = Dict[str, Union[str, int, float]]
 
@@ -263,30 +246,19 @@ class Data:
         """
         prev_total_size = "0"
         if prev_db_infos is not None:
-            prev_total_size = prev_db_infos["total_size"]  # type: ignore
+            prev_total_size = prev_db_infos["total_size"]  # type: ignore[assignment]
 
-        skip_dbsize = skip_sizes
-
-        query = """
-    SELECT
-        EXTRACT(EPOCH FROM NOW()) AS timestamp,
-        SUM(pg_stat_get_db_xact_commit(oid)+pg_stat_get_db_xact_rollback(oid))::BIGINT AS no_xact,
-        {db_size} AS total_size,
-        MAX(LENGTH(datname)) AS max_length
-    FROM
-        pg_database
-        {no_rds}
-        """.format(
-            db_size=prev_total_size
-            if skip_dbsize
-            else "SUM(pg_database_size(datname))",
-            no_rds="WHERE datname <> 'rdsadmin'" if using_rds else "",
-        )
-        cur = self.pg_conn.cursor()
-        cur.execute(
-            query,
-        )
-        ret = cur.fetchone()
+        query = queries.get("get_db_info")
+        with self.pg_conn.cursor() as cur:
+            cur.execute(
+                query,
+                {
+                    "skip_db_size": skip_sizes,
+                    "prev_total_size": prev_total_size,
+                    "using_rds": using_rds,
+                },
+            )
+            ret = cur.fetchone()
         tps = 0
         size_ev = 0.0
         if prev_db_infos is not None:
@@ -316,24 +288,13 @@ class Data:
         """
 
         if self.pg_num_version < 90200:
-            # prior to PostgreSQL 9.1, there was no state column
-            query = """
-    SELECT
-        COUNT(*) as active_connections
-    FROM pg_stat_activity
-    WHERE current_query NOT LIKE '<IDLE>%%'
-            """
+            query = queries.get("get_active_connections.sql")
         else:
-            query = """
-    SELECT
-        COUNT(*) as active_connections
-    FROM pg_stat_activity
-    WHERE state = 'active'
-            """
+            query = queries.get("get_active_connections_post_90200")
 
-        cur = self.pg_conn.cursor()
-        cur.execute(query)
-        ret = cur.fetchone()
+        with self.pg_conn.cursor() as cur:
+            cur.execute(query)
+            ret = cur.fetchone()
         active_connections = int(ret["active_connections"])
         return active_connections
 
@@ -342,190 +303,22 @@ class Data:
         Get activity from pg_stat_activity view.
         """
         if self.pg_num_version >= 110000:
-            # PostgreSQL 11 and more
-            query = """
-    SELECT
-        pg_stat_activity.pid AS pid,
-        pg_stat_activity.application_name AS appname,
-        CASE WHEN LENGTH(pg_stat_activity.datname) > 16
-            THEN SUBSTRING(pg_stat_activity.datname FROM 0 FOR 6)||'...'||SUBSTRING(pg_stat_activity.datname FROM '........$')
-            ELSE pg_stat_activity.datname
-            END
-        AS database,
-        CASE WHEN pg_stat_activity.client_addr IS NULL
-            THEN 'local'
-            ELSE pg_stat_activity.client_addr::TEXT
-            END
-        AS client,
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-        CASE WHEN pg_stat_activity.wait_event_type IN ('LWLock', 'Lock', 'BufferPin') THEN true ELSE false END AS wait,
-        pg_stat_activity.usename AS user,
-        pg_stat_activity.state AS state,
-        pg_stat_activity.query AS query,
-        pg_stat_activity.backend_type = 'parallel worker' AS is_parallel_worker
-    FROM
-        pg_stat_activity
-    WHERE
-        state <> 'idle'
-        AND pid <> pg_backend_pid()
-        AND CASE WHEN %(min_duration)s = 0 THEN true
-            ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-            END
-    ORDER BY
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) DESC
-            """
+            query = queries.get("get_pg_activity_post_110000")
         elif self.pg_num_version >= 100000:
-            # PostgreSQL 10
-            # We assume a background_worker with a not null query is a parallel worker.
-            query = """
-    SELECT
-        pg_stat_activity.pid AS pid,
-        pg_stat_activity.application_name AS appname,
-        CASE WHEN LENGTH(pg_stat_activity.datname) > 16
-            THEN SUBSTRING(pg_stat_activity.datname FROM 0 FOR 6)||'...'||SUBSTRING(pg_stat_activity.datname FROM '........$')
-            ELSE pg_stat_activity.datname
-            END
-        AS database,
-        CASE WHEN pg_stat_activity.client_addr IS NULL
-            THEN 'local'
-            ELSE pg_stat_activity.client_addr::TEXT
-            END
-        AS client,
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-        CASE WHEN pg_stat_activity.wait_event_type IN ('LWLock', 'Lock', 'BufferPin') THEN true ELSE false END AS wait,
-        pg_stat_activity.usename AS user,
-        pg_stat_activity.state AS state,
-        pg_stat_activity.query AS query,
-        (pg_stat_activity.backend_type = 'background worker' AND pg_stat_activity.query IS NOT NULL) AS is_parallel_worker
-    FROM
-        pg_stat_activity
-    WHERE
-        state <> 'idle'
-        AND pid <> pg_backend_pid()
-        AND CASE WHEN %(min_duration)s = 0 THEN true
-            ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-            END
-    ORDER BY
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) DESC
-            """
+            query = queries.get("get_pg_activity_post_100000")
         elif self.pg_num_version >= 90600:
-            # PostgreSQL prior to 10.0 and >= 9.6.0
-            # There is no way to see parallel workers
-            query = """
-    SELECT
-        pg_stat_activity.pid AS pid,
-        pg_stat_activity.application_name AS appname,
-        CASE WHEN LENGTH(pg_stat_activity.datname) > 16
-            THEN SUBSTRING(pg_stat_activity.datname FROM 0 FOR 6)||'...'||SUBSTRING(pg_stat_activity.datname FROM '........$')
-            ELSE pg_stat_activity.datname
-            END
-        AS database,
-        CASE WHEN pg_stat_activity.client_addr IS NULL
-            THEN 'local'
-            ELSE pg_stat_activity.client_addr::TEXT
-            END
-        AS client,
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-        pg_stat_activity.wait_event IS NOT NULL AS wait,
-        pg_stat_activity.usename AS user,
-        pg_stat_activity.state AS state,
-        pg_stat_activity.query AS query,
-        false AS is_parallel_worker
-    FROM
-        pg_stat_activity
-    WHERE
-        state <> 'idle'
-        AND pid <> pg_backend_pid()
-        AND CASE WHEN %(min_duration)s = 0 THEN true
-            ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-            END
-    ORDER BY
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) DESC
-            """
+            query = queries.get("get_pg_activity_post_90600")
         elif self.pg_num_version >= 90200:
-            # PostgreSQL prior to 9.6.0 and >= 9.2.0
-            query = """
-    SELECT
-        pg_stat_activity.pid AS pid,
-        pg_stat_activity.application_name AS appname,
-        CASE WHEN LENGTH(pg_stat_activity.datname) > 16
-            THEN SUBSTRING(pg_stat_activity.datname FROM 0 FOR 6)||'...'||SUBSTRING(pg_stat_activity.datname FROM '........$')
-            ELSE pg_stat_activity.datname
-            END
-        AS database,
-        CASE WHEN pg_stat_activity.client_addr IS NULL
-            THEN 'local'
-            ELSE pg_stat_activity.client_addr::TEXT
-            END
-        AS client,
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-        pg_stat_activity.waiting AS wait,
-        pg_stat_activity.usename AS user,
-        pg_stat_activity.state AS state,
-        pg_stat_activity.query AS query,
-        false AS is_parallel_worker
-    FROM
-        pg_stat_activity
-    WHERE
-        state <> 'idle'
-        AND pid <> pg_backend_pid()
-        AND CASE WHEN %(min_duration)s = 0 THEN true
-            ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-            END
-    ORDER BY
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) DESC
-            """
+            query = queries.get("get_pg_activity_post_90200")
         elif self.pg_num_version < 90200:
-            # PostgreSQL prior to 9.2.0
-            query = """
-    SELECT
-        pg_stat_activity.procpid AS pid,
-        '<unknown>' AS appname,
-        CASE
-            WHEN LENGTH(pg_stat_activity.datname) > 16
-            THEN SUBSTRING(pg_stat_activity.datname FROM 0 FOR 6)||'...'||SUBSTRING(pg_stat_activity.datname FROM '........$')
-            ELSE pg_stat_activity.datname
-            END
-        AS database,
-        CASE WHEN pg_stat_activity.client_addr IS NULL
-            THEN 'local'
-            ELSE pg_stat_activity.client_addr::TEXT
-            END
-        AS client,
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-        pg_stat_activity.waiting AS wait,
-        pg_stat_activity.usename AS user,
-        CASE
-            WHEN pg_stat_activity.current_query = '<IDLE> in transaction (aborted)' THEN 'idle in transaction (aborted)'
-            WHEN pg_stat_activity.current_query = '<IDLE> in transaction' THEN 'idle in transaction'
-            WHEN pg_stat_activity.current_query = '<IDLE>' THEN 'idle'
-            ELSE 'active'
-            END
-        AS state,
-        CASE
-           WHEN pg_stat_activity.current_query LIKE '<IDLE>%%' THEN 'None'
-           ELSE pg_stat_activity.current_query
-           END
-        AS query,
-        false AS is_parallel_worker
-    FROM
-        pg_stat_activity
-    WHERE
-        current_query <> '<IDLE>'
-        AND procpid <> pg_backend_pid()
-        AND CASE WHEN %(min_duration)s = 0 THEN true
-            ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-            END
-    ORDER BY
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) DESC
-            """
+            query = queries.get("get_pg_activity")
 
         duration_column = self.get_duration_column(duration_mode)
         query = query.format(duration_column=duration_column)
 
-        cur = self.pg_conn.cursor()
-        cur.execute(query, {"min_duration": self.min_duration})
-        ret = cur.fetchall()
+        with self.pg_conn.cursor() as cur:
+            cur.execute(query, {"min_duration": self.min_duration})
+            ret = cur.fetchall()
 
         return [RunningProcess(**row) for row in ret]
 
@@ -534,91 +327,16 @@ class Data:
         Get waiting queries.
         """
         if self.pg_num_version >= 90200:
-            query = """
-    SELECT
-        pg_locks.pid AS pid,
-        pg_stat_activity.application_name AS appname,
-        CASE WHEN LENGTH(pg_stat_activity.datname) > 16
-            THEN SUBSTRING(pg_stat_activity.datname FROM 0 FOR 6)||'...'||SUBSTRING(pg_stat_activity.datname FROM '........$')
-            ELSE pg_stat_activity.datname
-            END
-        AS database,
-        pg_stat_activity.usename AS user,
-        CASE WHEN pg_stat_activity.client_addr IS NULL
-            THEN 'local'
-            ELSE pg_stat_activity.client_addr::TEXT
-            END
-        AS client,
-        pg_locks.mode AS mode,
-        pg_locks.locktype AS type,
-        pg_locks.relation::regclass AS relation,
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-        pg_stat_activity.state as state,
-        pg_stat_activity.query AS query
-    FROM
-        pg_catalog.pg_locks
-        JOIN pg_catalog.pg_stat_activity ON(pg_catalog.pg_locks.pid = pg_catalog.pg_stat_activity.pid)
-    WHERE
-        NOT pg_catalog.pg_locks.granted
-        AND pg_catalog.pg_stat_activity.pid <> pg_backend_pid()
-        AND CASE WHEN %(min_duration)s = 0 THEN true
-            ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-            END
-    ORDER BY
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) DESC
-            """
+            query = queries.get("get_waiting_post_90200")
         elif self.pg_num_version < 90200:
-            query = """
-    SELECT
-        pg_locks.pid AS pid,
-        '<unknown>' AS appname,
-        CASE
-            WHEN LENGTH(pg_stat_activity.datname) > 16
-            THEN SUBSTRING(pg_stat_activity.datname FROM 0 FOR 6)||'...'||SUBSTRING(pg_stat_activity.datname FROM '........$')
-            ELSE pg_stat_activity.datname
-            END
-        AS database,
-        pg_stat_activity.usename AS user,
-        CASE WHEN pg_stat_activity.client_addr IS NULL
-            THEN 'local'
-            ELSE pg_stat_activity.client_addr::TEXT
-            END
-        AS client,
-        pg_locks.mode AS mode,
-        pg_locks.locktype AS type,
-        pg_locks.relation::regclass AS relation,
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-        CASE
-           WHEN pg_stat_activity.current_query = '<IDLE> in transaction (aborted)' THEN 'idle in transaction (aborted)'
-           WHEN pg_stat_activity.current_query = '<IDLE> in transaction' THEN 'idle in transaction'
-           WHEN pg_stat_activity.current_query = '<IDLE>' THEN 'idle'
-           ELSE 'active'
-           END
-        AS state,
-        CASE
-           WHEN pg_stat_activity.current_query LIKE '<IDLE>%%' THEN 'None'
-           ELSE pg_stat_activity.current_query
-           END
-        AS query
-    FROM
-        pg_catalog.pg_locks
-        JOIN pg_catalog.pg_stat_activity ON(pg_catalog.pg_locks.pid = pg_catalog.pg_stat_activity.procpid)
-    WHERE
-        NOT pg_catalog.pg_locks.granted
-        AND pg_catalog.pg_stat_activity.procpid <> pg_backend_pid()
-        AND CASE WHEN %(min_duration)s = 0 THEN true
-            ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-            END
-    ORDER BY
-        EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) DESC
-            """
+            query = queries.get("get_waiting")
 
         duration_column = self.get_duration_column(duration_mode)
         query = query.format(duration_column=duration_column)
 
-        cur = self.pg_conn.cursor()
-        cur.execute(query, {"min_duration": self.min_duration})
-        ret = cur.fetchall()
+        with self.pg_conn.cursor() as cur:
+            cur.execute(query, {"min_duration": self.min_duration})
+            ret = cur.fetchall()
         return [BWProcess(**row) for row in ret]
 
     def pg_get_blocking(self, duration_mode: int = 1) -> List[BWProcess]:
@@ -626,239 +344,26 @@ class Data:
         Get blocking queries
         """
         if self.pg_num_version >= 90200:
-            query = """
-    SELECT
-        pid,
-        application_name AS appname,
-        CASE
-            WHEN LENGTH(datname) > 16
-            THEN SUBSTRING(datname FROM 0 FOR 6)||'...'||SUBSTRING(datname FROM '........$')
-            ELSE datname
-            END
-        AS database,
-        usename AS user,
-        client,
-        relation,
-        mode,
-        locktype AS type,
-        duration,
-        state,
-        query
-    FROM
-        (
-        SELECT
-            blocking.pid,
-            pg_stat_activity.application_name,
-            pg_stat_activity.query,
-            blocking.mode,
-            pg_stat_activity.datname,
-            pg_stat_activity.usename,
-            CASE WHEN pg_stat_activity.client_addr IS NULL
-                THEN 'local'
-                ELSE pg_stat_activity.client_addr::TEXT
-                END
-            AS client,
-            blocking.locktype,
-            EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-            pg_stat_activity.state as state,
-            blocking.relation::regclass AS relation
-        FROM
-            pg_locks AS blocking
-            JOIN (
-                SELECT
-                    transactionid
-                FROM
-                    pg_locks
-                WHERE
-                    NOT granted) AS blocked ON (blocking.transactionid = blocked.transactionid)
-            JOIN pg_stat_activity ON (blocking.pid = pg_stat_activity.pid)
-        WHERE
-            blocking.granted
-            AND CASE WHEN %(min_duration)s = 0 THEN true
-                ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-                END
-        UNION ALL
-        SELECT
-            blocking.pid,
-            pg_stat_activity.application_name,
-            pg_stat_activity.query,
-            blocking.mode,
-            pg_stat_activity.datname,
-            pg_stat_activity.usename,
-            CASE WHEN pg_stat_activity.client_addr IS NULL
-                THEN 'local'
-                ELSE pg_stat_activity.client_addr::TEXT
-                END
-            AS client,
-            blocking.locktype,
-            EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-            pg_stat_activity.state as state,
-            blocking.relation::regclass AS relation
-        FROM
-            pg_locks AS blocking
-            JOIN (
-                SELECT
-                    database,
-                    relation,
-                    mode
-                FROM
-                    pg_locks
-                WHERE
-                    NOT granted
-                    AND relation IS NOT NULL) AS blocked ON (blocking.database = blocked.database AND blocking.relation = blocked.relation)
-            JOIN pg_stat_activity ON (blocking.pid = pg_stat_activity.pid)
-        WHERE
-            blocking.granted
-            AND CASE WHEN %(min_duration)s = 0 THEN true
-                ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-                END
-        ) AS sq
-    GROUP BY
-        pid,
-        application_name,
-        query,
-        mode,
-        locktype,
-        duration,
-        datname,
-        usename,
-        client,
-        state,
-        relation
-    ORDER BY
-        duration DESC
-            """
+            query = queries.get("get_blocking_post_90200")
         elif self.pg_num_version < 90200:
-            query = """
-    SELECT
-        pid,
-        appname,
-        CASE
-            WHEN LENGTH(datname) > 16
-            THEN SUBSTRING(datname FROM 0 FOR 6)||'...'||SUBSTRING(datname FROM '........$')
-            ELSE datname
-            END
-        AS database,
-        usename AS user,
-        client,
-        relation,
-        mode,
-        locktype AS type,
-        duration,
-        CASE
-           WHEN sq.query = '<IDLE> in transaction (aborted)' THEN 'idle in transaction (aborted)'
-           WHEN sq.query = '<IDLE> in transaction' THEN 'idle in transaction'
-           WHEN sq.query = '<IDLE>' THEN 'idle'
-           ELSE 'active'
-           END
-        AS state,
-        CASE
-           WHEN sq.query LIKE '<IDLE>%%' THEN 'None'
-           ELSE sq.query
-           END
-        AS query
-    FROM
-        (
-        SELECT
-            blocking.pid,
-            '<unknown>' AS appname,
-            pg_stat_activity.current_query AS query,
-            blocking.mode,
-            pg_stat_activity.datname,
-            pg_stat_activity.usename,
-            CASE WHEN pg_stat_activity.client_addr IS NULL
-                THEN 'local'
-                ELSE pg_stat_activity.client_addr::TEXT
-                END
-            AS client,
-            blocking.locktype,EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-            NULL AS state,
-            blocking.relation::regclass AS relation
-        FROM
-            pg_locks AS blocking
-            JOIN (
-                SELECT
-                    transactionid
-                FROM
-                    pg_locks
-                WHERE
-                    NOT granted) AS blocked ON (blocking.transactionid = blocked.transactionid)
-            JOIN pg_stat_activity ON (blocking.pid = pg_stat_activity.procpid)
-        WHERE
-            blocking.granted
-            AND CASE WHEN %(min_duration)s = 0 THEN true
-                ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-                END
-        UNION ALL
-        SELECT
-            blocking.pid,
-            '<unknown>' AS appname,
-            pg_stat_activity.current_query AS query,
-            blocking.mode,
-            pg_stat_activity.datname,
-            pg_stat_activity.usename,
-            CASE WHEN pg_stat_activity.client_addr IS NULL
-                THEN 'local'
-                ELSE pg_stat_activity.client_addr::TEXT
-                END
-            AS client,
-            blocking.locktype,
-            EXTRACT(epoch FROM (NOW() - pg_stat_activity.{duration_column})) AS duration,
-            NULL AS state,
-            blocking.relation::regclass AS relation
-        FROM
-            pg_locks AS blocking
-            JOIN (
-                SELECT
-                    database,
-                    relation,
-                    mode
-                FROM
-                    pg_locks
-                WHERE
-                    NOT granted
-                    AND relation IS NOT NULL) AS blocked ON (blocking.database = blocked.database AND blocking.relation = blocked.relation)
-            JOIN pg_stat_activity ON (blocking.pid = pg_stat_activity.procpid)
-        WHERE
-            blocking.granted
-            AND CASE WHEN %(min_duration)s = 0 THEN true
-                ELSE extract(epoch from now() - {duration_column}) > %(min_duration)s
-                END
-        ) AS sq
-    GROUP BY
-        pid,
-        appname,
-        query,
-        mode,
-        locktype,
-        duration,
-        datname,
-        usename,
-        client,
-        state,
-        relation
-    ORDER BY
-        duration DESC
-            """
+            query = queries.get("get_blocking")
 
         duration_column = self.get_duration_column(duration_mode)
         query = query.format(duration_column=duration_column)
 
-        cur = self.pg_conn.cursor()
-        cur.execute(query, {"min_duration": self.min_duration})
-        ret = cur.fetchall()
+        with self.pg_conn.cursor() as cur:
+            cur.execute(query, {"min_duration": self.min_duration})
+            ret = cur.fetchall()
         return [BWProcess(**row) for row in ret]
 
     def pg_is_local(self) -> bool:
         """
         Is pg_activity connected localy ?
         """
-        query = """
-        SELECT inet_server_addr() AS inet_server_addr, inet_client_addr() AS inet_client_addr
-        """
-        cur = self.pg_conn.cursor()
-        cur.execute(query)
-        ret = cur.fetchone()
+        query = queries.get("get_pga_inet_addresses")
+        with self.pg_conn.cursor() as cur:
+            cur.execute(query)
+            ret = cur.fetchone()
         if ret["inet_server_addr"] == ret["inet_client_addr"]:
             return True
         return False
@@ -884,12 +389,11 @@ class Data:
 def pg_connect(
     options: optparse.Values,
     dsn: str,
-    password: Optional[str] = None,
-    service: Optional[str] = None,
     exit_on_failed: bool = True,
     min_duration: float = 0.0,
 ) -> Data:
     """Try to build a Data instance by to connecting to postgres."""
+    password = None
     for nb_try in range(2):
         try:
             data = Data.pg_connect(
@@ -900,13 +404,13 @@ def pg_connect(
                 password=password,
                 database=options.dbname,
                 rds_mode=options.rds,
-                service=service,
                 min_duration=min_duration,
+                hide_queries_in_logs=options.hide_queries_in_logs,
             )
-        except psycopg2.OperationalError as err:
+        except OperationalError as err:
             errmsg = str(err).strip()
             if nb_try < 1 and (
-                err.pgcode == errorcodes.INVALID_PASSWORD
+                isinstance(err, InvalidPassword)
                 or errmsg.startswith("FATAL:  password authentication failed for user")
                 or errmsg == "fe_sendauth: no password supplied"
             ):

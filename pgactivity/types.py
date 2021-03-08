@@ -1,5 +1,5 @@
 import enum
-import optparse
+import functools
 from typing import (
     Any,
     Callable,
@@ -19,7 +19,6 @@ from typing import (
 
 import attr
 import psutil
-from psycopg2.extensions import parse_dsn
 
 from . import colors, utils
 
@@ -109,7 +108,7 @@ class Deserializable:
                 f"unknown field(s): {', '.join(sorted(unknown))}"
             ) from None
 
-        return cls(**args)  # type: ignore
+        return cls(**args)  # type: ignore[call-arg]
 
 
 E = TypeVar("E", bound=enum.IntEnum)
@@ -399,7 +398,7 @@ class UI:
 
         if Flag.APPNAME & flag:
             add_column(
-                key="appname",
+                key="application_name",
                 name="APP",
                 template_h="%16s ",
                 max_width=16,
@@ -423,8 +422,10 @@ class UI:
                 key="database",
                 name="DATABASE",
                 template_h=f"%-{max_db_length}s ",
+                transform=functools.lru_cache()(
+                    functools.partial(utils.ellipsis, width=16)
+                ),
                 sort_key=None,
-                max_width=16,
             )
         if Flag.IOWAIT & flag:
             add_column(
@@ -509,7 +510,7 @@ class UI:
             QueryMode.activities: [
                 "pid",
                 "database",
-                "appname",
+                "application_name",
                 "user",
                 "client",
                 "cpu",
@@ -525,7 +526,7 @@ class UI:
             QueryMode.waiting: [
                 "pid",
                 "database",
-                "appname",
+                "application_name",
                 "user",
                 "client",
                 "relation",
@@ -538,7 +539,7 @@ class UI:
             QueryMode.blocking: [
                 "pid",
                 "database",
-                "appname",
+                "application_name",
                 "user",
                 "client",
                 "relation",
@@ -694,40 +695,6 @@ class Host:
     port: int
     dbname: str
 
-    @classmethod
-    def from_options(
-        cls,
-        options: optparse.Values,
-        dsn: str,
-        hostname: str,
-    ) -> "Host":
-        """Build a host instance from options and dsn
-
-        >>> options = optparse.Values(
-        ...     defaults = {
-        ...         "username": "bob",
-        ...         "host": "test",
-        ...         "port": 5432,
-        ...         "dbname": "pg",
-        ... })
-        >>> Host.from_options(options, "", "test")
-        Host(hostname='test', user='bob', host='test', port=5432, dbname='pg')
-        >>> Host.from_options(options, "host=/tmp port=5432 user=toto dbname=pgbench", "test")
-        Host(hostname='test', user='toto', host='/tmp', port=5432, dbname='pgbench')
-        >>> Host.from_options(options, "postgresql://toto@localhost:5432/bench", "test")
-        Host(hostname='test', user='toto', host='localhost', port=5432, dbname='bench')
-        """
-
-        pdsn = parse_dsn(dsn)
-
-        return cls(
-            hostname,
-            pdsn.get("user", options.username),
-            pdsn.get("host", options.host),
-            int(pdsn.get("port", options.port)),
-            pdsn.get("dbname", options.dbname),
-        )
-
 
 @attr.s(auto_attribs=True, slots=True)
 class DBInfo:
@@ -835,13 +802,13 @@ def locktype(value: str) -> LockType:
 @attr.s(auto_attribs=True, slots=True)
 class BaseProcess:
     pid: int
-    appname: str
+    application_name: str
     database: str
     user: str
     client: str
     duration: Optional[float]
     state: str
-    query: str
+    query: Optional[str]
     is_parallel_worker: bool
 
 
