@@ -5,3 +5,4 @@ pgactivity/__pycache__/
 .coverage
 .vscode
 .tox
+docs/man/pg_activity.1

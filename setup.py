@@ -1,4 +1,9 @@
 import pathlib
+import shutil
+import subprocess
+import sys
+from datetime import date
+from distutils.command.build import build as _build
 
 from setuptools import find_packages, setup
 
@@ -16,16 +21,48 @@ def get_version() -> str:
     raise Exception(f"version information not found in {fpath}")
 
 
+version = get_version()
+description = "Command line tool for PostgreSQL server activity monitoring."
+
+
+class build(_build):
+    def run(self):
+        super().run()
+        build_manpage()
+
+
+def build_manpage() -> None:
+    manpath = HERE / "docs" / "man"
+    pod2man = shutil.which("pod2man")
+    if pod2man is None:
+        print("warning: pod2man not found, skipping man page build", file=sys.stderr)
+        return
+    print("building man page")
+    args = [
+        pod2man,
+        "-r",
+        f"pg_activity {version}",
+        "-d",
+        date.today().isoformat(),
+        "-c",
+        description,
+        str(manpath / "pg_activity.pod"),
+    ]
+    r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    r.check_returncode()
+    (manpath / "pg_activity.1").write_bytes(r.stdout)
+
+
 setup(
     name="pg_activity",
-    version=get_version(),
+    version=version,
     author="Dalibo",
     author_email="contact@dalibo.com",
     packages=find_packages("."),
     include_package_data=True,
     url="https://github.com/dalibo/pg_activity",
     license="PostgreSQL",
-    description="Command line tool for PostgreSQL server activity monitoring.",
+    description=description,
     long_description=long_description,
     long_description_content_type="text/markdown",
     classifiers=[
@@ -37,6 +74,9 @@ setup(
         "Topic :: Database",
     ],
     keywords="postgresql activity monitoring cli sql top",
+    cmdclass={
+        "build": build,
+    },
     python_requires=">=3.6",
     install_requires=[
         "attrs >= 17, !=21.1",
