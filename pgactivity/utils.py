@@ -1,11 +1,23 @@
 import functools
 import re
 from datetime import datetime, timedelta
-from typing import Any, IO, Iterable, List, Mapping, Optional, Tuple, Union
+from typing import (
+    Any,
+    IO,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+    TYPE_CHECKING,
+)
 
 import attr
 import humanize
 
+if TYPE_CHECKING:
+    from .types import BaseProcess
 
 naturalsize = functools.partial(humanize.naturalsize, gnu=True, format="%.2f")
 naturaltimedelta = functools.partial(
@@ -21,24 +33,24 @@ class MessagePile:
     """A pile of message.
 
     >>> p = MessagePile(2)
-    >>> p.send("hello")
+    >>> p.send(("hello", "red"))
     >>> p.get()
-    'hello'
-    >>> p.send("world")
+    ('hello', 'red')
+    >>> p.send(("world", "green"))
     >>> p.get()
-    'world'
+    ('world', 'green')
     >>> p.get()
-    'world'
+    ('world', 'green')
     >>> p.get()
     """
 
     n: int
-    messages: List[str] = attr.ib(default=attr.Factory(list), init=False)
+    messages: List[Tuple[str, str]] = attr.ib(default=attr.Factory(list), init=False)
 
-    def send(self, message: str) -> None:
+    def send(self, message: Tuple[str, str]) -> None:
         self.messages[:] = [message] * self.n
 
-    def get(self) -> Optional[str]:
+    def get(self) -> Optional[Tuple[str, str]]:
         if self.messages:
             return self.messages.pop()
         return None
@@ -70,24 +82,6 @@ def clean_str(string: str) -> str:
     msg = re.sub(r"^\s", r"", msg)
     msg = re.sub(r"\s$", r"", msg)
     return msg
-
-
-def ellipsis(v: str, width: int) -> str:
-    """Shorten a string to specified width with '...' in the middle.
-
-    >>> ellipsis("loooooooooog", 7)
-    'lo...og'
-    >>> ellipsis("loooooooooog", 6)
-    'lo...g'
-    >>> ellipsis("short", 10)
-    'short'
-    """
-    lv = len(v)
-    if lv <= width:
-        return v
-    assert width >= 5
-    wl = (width - 3) // 2
-    return v[: wl + 1] + "..." + v[-wl:]
 
 
 def get_duration(duration: Optional[float]) -> float:
@@ -182,6 +176,11 @@ def short_state(state: str) -> str:
         "idle in transaction": "idle in trans",
         "idle in transaction (aborted)": "idle in trans (a)",
     }.get(state, state)
+
+
+def format_query(query: str, process: "BaseProcess") -> str:
+    prefix = r"\_ " if process.is_parallel_worker else ""
+    return prefix + clean_str(query)
 
 
 def csv_write(

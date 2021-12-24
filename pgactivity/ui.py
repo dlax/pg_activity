@@ -4,6 +4,10 @@ from typing import Dict, List, Optional, cast
 
 import attr
 from blessed import Terminal
+from rich.console import Console, Group
+from rich.layout import Layout
+from rich.live import Live
+from rich.text import Text
 
 from . import __version__, activities, handlers, keys, types, utils, views, widgets
 from .data import Data
@@ -11,6 +15,7 @@ from .data import Data
 
 def main(
     term: Terminal,
+    console: Console,
     data: Data,
     host: types.Host,
     options: optparse.Values,
@@ -18,9 +23,9 @@ def main(
     *,
     render_header: bool = True,
     render_footer: bool = True,
-    width: Optional[int] = None,
     wait_on_actions: Optional[float] = None,
 ) -> None:
+    width, height = console.size
 
     fs_blocksize = options.blocksize
 
@@ -39,7 +44,6 @@ def main(
         min_duration=options.minduration,
         duration_mode=int(options.durationmode),
         wrap_query=options.wrap_query,
-        max_db_length=min(max(server_information.max_dbname_length, 8), 16),
         filters=data.filters,
         show_instance_info_in_header=options.show_instance_info_in_header,
         show_worker_info_in_header=options.show_worker_info_in_header,
@@ -48,18 +52,30 @@ def main(
 
     key, in_help = None, False
     sys_procs: Dict[int, types.SystemProcess] = {}
+    system_info = None
     pg_procs = types.SelectableProcesses([])
-    activity_stats: types.ActivityStats
 
     msg_pile = utils.MessagePile(2)
 
-    with term.fullscreen(), term.cbreak(), term.hidden_cursor():
+    layout = Layout()
+    body = Layout(" ", name="body")
+    footer = Layout(
+        Text("loading...", style="cyan", justify="center"), name="footer", size=1
+    )
+    layout.split_column(body, footer)
+
+    with Live(
+        layout,
+        console=console,
+        screen=True,
+        vertical_overflow="crop",
+    ) as live, term.cbreak():
         while True:
             if key == keys.HELP:
                 in_help = True
             elif in_help and key is not None:
                 in_help, key = False, None
-                print(term.clear + term.home, end="")
+                live.update(layout)
             elif key == keys.EXIT:
                 break
             elif not ui.interactive() and key == keys.SPACE:
@@ -74,10 +90,10 @@ def main(
                     if pg_procs.focus_prev():
                         ui.start_interactive()
                 elif keys.is_process_nextpage(key):
-                    if pg_procs.focus_next(term.height // 3):
+                    if pg_procs.focus_next(height // 3):
                         ui.start_interactive()
                 elif keys.is_process_prevpage(key):
-                    if pg_procs.focus_prev(term.height // 3):
+                    if pg_procs.focus_prev(height // 3):
                         ui.start_interactive()
                 elif keys.is_process_first(key):
                     if pg_procs.focus_first():
@@ -110,7 +126,7 @@ def main(
                         ptitle = f"processes {', '.join((str(p) for p in pids))}"
                     else:
                         ptitle = f"process {pids[0]}"
-                    with term.location(x=0, y=term.height // 3):
+                    with term.location(x=0, y=height // 3):
                         print(
                             widgets.boxed(
                                 term,
@@ -126,15 +142,11 @@ def main(
                         if action == "cancel":
                             for pid in pids:
                                 data.pg_cancel_backend(pid)
-                            msg_pile.send(
-                                action_formatter(f"{ptitle.capitalize()} cancelled")
-                            )
+                            msg_pile.send((f"{ptitle.capitalize()} cancelled", color))
                         elif action == "terminate":
                             for pid in pids:
                                 data.pg_terminate_backend(pid)
-                            msg_pile.send(
-                                action_formatter(f"{ptitle.capitalize()} terminated")
-                            )
+                            msg_pile.send((f"{ptitle.capitalize()} terminated", color))
                         pg_procs.reset()
                         ui.end_interactive()
                         if wait_on_actions:
@@ -164,13 +176,7 @@ def main(
             if in_help:
                 # Only draw help screen once.
                 if key is not None:
-                    print(term.clear + term.home, end="")
-                    views.help(
-                        term,
-                        __version__,
-                        is_local,
-                        lines_counter=views.line_counter(term.height),
-                    )
+                    live.update(views.help(__version__, is_local))
 
             else:
                 if not ui.in_pause and not ui.interactive():
@@ -225,24 +231,29 @@ def main(
                         else:
                             assert False  # help type checking
 
-                    activity_stats = (pg_procs, system_info) if is_local else pg_procs  # type: ignore[assignment]
-
                 if options.output is not None:
                     with open(options.output, "a") as f:
                         utils.csv_write(f, map(attr.asdict, pg_procs.items))
 
-                views.screen(
-                    term,
+                header = views.header(
                     ui,
                     host=host,
                     pg_version=data.pg_version,
                     server_information=server_information,
-                    activity_stats=activity_stats,
-                    message=msg_pile.get(),
-                    render_header=render_header,
-                    render_footer=render_footer,
-                    width=width,
+                    system_info=system_info,
                 )
+                hlines = console.render_lines(header)
+                pg_procs.set_items(
+                    activities.sorted(pg_procs.items, key=ui.sort_key, reverse=True)
+                )
+                table = views.processes(
+                    ui, pg_procs, console.size.height - len(hlines) - 1
+                )
+                body.update(Group(header, table))
+
+                message = msg_pile.get()
+                if render_footer:
+                    footer.update(views.footer(ui, message=message))
 
                 if ui.interactive():
                     if not pg_procs.pinned:

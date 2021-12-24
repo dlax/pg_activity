@@ -1,11 +1,9 @@
 import enum
-import functools
 from datetime import timedelta
 from typing import (
     Any,
     Callable,
     Dict,
-    Iterable,
     Iterator,
     List,
     Mapping,
@@ -197,79 +195,45 @@ class Column:
     """A column in stats table.
 
     >>> c = Column("pid", "PID", mandatory=True, sort_key=SortKey.cpu,
-    ...            min_width=6, max_width=6,
-    ...            transform=lambda v: str(v)[::-1])
-    >>> c.title_render()
-    'PID   '
+    ...            transform=lambda v, p: str(v)[::-1])
     >>> c.title_color(SortKey.cpu)
     'cyan'
     >>> c.title_color(SortKey.duration)
     'green'
-    >>> c.render('1234')
-    '4321  '
-    >>> c.render('12345678')
-    '876543'
+    >>> process = object()
+    >>> c.render('1234', process)
+    '4321'
+    >>> c.render('12345678', process)
+    '87654321'
     >>> c.color_key
     'pid'
-
-    >>> c = attr.evolve(c, justify="right", min_width=4, max_width=5)
-    >>> c.title_render()
-    ' PID'
-    >>> c.render('7654321')
-    '12345'
-    >>> c.render('21')
-    '  12'
     """
 
     key: str = attr.ib(repr=False)
     name: str
     mandatory: bool = False
     sort_key: Optional[SortKey] = None
-    min_width: int = attr.ib(default=0, repr=False)
-    max_width: Optional[int] = attr.ib(default=None, repr=False)
     justify: str = attr.ib(
         "left", validator=validators.in_(["left", "center", "right"])
     )
-    transform: Callable[[Any], str] = attr.ib(
-        default=lambda v: str(v) if v is not None else "", repr=False
+    transform: Callable[[Any, "BaseProcess"], str] = attr.ib(
+        default=lambda v, p: str(v) if v is not None else "", repr=False
     )
     color_key: Union[str, Callable[[Any], str]] = attr.ib(
         default=_color_key_marker, repr=False
     )
 
-    _justify: Callable[[str], str] = attr.ib(init=False)
-
     def __attrs_post_init__(self) -> None:
         if self.color_key == _color_key_marker:
             object.__setattr__(self, "color_key", self.key)
-
-        if self.justify == "left":
-
-            def _justify(value: str) -> str:
-                return value.ljust(self.min_width)[: self.max_width]
-
-        elif self.justify == "right":
-
-            def _justify(value: str) -> str:
-                return value.rjust(self.min_width)[: self.max_width]
-
-        elif self.justify == "center":
-
-            def _justify(value: str) -> str:
-                return value.center(self.min_width)[: self.max_width]
-
-        object.__setattr__(self, "_justify", _justify)
-
-    def title_render(self) -> str:
-        return self._justify(self.name)
 
     def title_color(self, sort_by: SortKey) -> str:
         if self.sort_key == sort_by:
             return "cyan"  # TODO: define a Color enum
         return "green"
 
-    def render(self, value: Any) -> str:
-        return self._justify(self.transform(value))
+    def render(self, value: Any, process: "BaseProcess") -> str:
+        return self.transform(value, process)
 
     def color(self, value: Any) -> str:
         if callable(self.color_key):
@@ -301,7 +265,6 @@ class UI:
         cls,
         flag: Flag = Flag.all(),
         *,
-        max_db_length: int = 16,
         filters: Filters = NO_FILTER,
         **kwargs: Any,
     ) -> "UI":
@@ -315,57 +278,44 @@ class UI:
             add_column(
                 key="application_name",
                 name="APP",
-                min_width=16,
-                max_width=16,
                 justify="right",
             )
         if Flag.CLIENT & flag:
             add_column(
                 key="client",
                 name="CLIENT",
-                min_width=16,
-                max_width=16,
                 justify="right",
             )
         if Flag.CPU & flag:
             add_column(
                 key="cpu",
                 name="CPU%",
-                min_width=6,
                 sort_key=SortKey.cpu,
             )
         if Flag.DATABASE & flag:
             add_column(
                 key="database",
                 name="DATABASE(*)" if filters.dbname else "DATABASE",
-                min_width=max_db_length,
-                transform=functools.lru_cache()(
-                    lambda v: utils.ellipsis(v, width=16) if v else "",
-                ),
                 sort_key=None,
             )
         if Flag.IOWAIT & flag:
             add_column(
                 key="io_wait",
                 name="IOW",
-                min_width=4,
-                transform=utils.yn,
+                transform=lambda v, p: utils.yn(v),
                 color_key=colors.wait,
             )
         if Flag.MEM & flag:
             add_column(
                 key="mem",
                 name="MEM%",
-                min_width=4,
                 sort_key=SortKey.mem,
-                transform=lambda v: str(round(v, 1)),
+                transform=lambda v, p: str(round(v, 1)),
             )
         if Flag.MODE & flag:
             add_column(
                 key="mode",
                 name="MODE",
-                min_width=16,
-                max_width=16,
                 justify="right",
                 color_key=colors.lock_mode,
             )
@@ -373,80 +323,67 @@ class UI:
             add_column(
                 key="pid",
                 name="PID",
-                min_width=6,
             )
         add_column(
             key="query",
             name="Query",
-            min_width=2,
+            transform=utils.format_query,
         )
         if Flag.READ & flag:
             add_column(
                 key="read",
                 name="READ/s",
-                min_width=8,
                 sort_key=SortKey.read,
-                transform=utils.naturalsize,
+                transform=lambda v, p: utils.naturalsize(v),
             )
         if Flag.RELATION & flag:
             add_column(
                 key="relation",
                 name="RELATION",
-                min_width=9,
-                max_width=9,
                 justify="right",
             )
         add_column(
             key="state",
             name="state",
-            min_width=17,
             justify="right",
-            transform=utils.short_state,
+            transform=lambda v, p: utils.short_state(v),
             color_key=colors.short_state,
         )
         if Flag.TIME & flag:
             add_column(
                 key="duration",
                 name="TIME+",
-                min_width=9,
                 justify="right",
                 sort_key=SortKey.duration,
-                transform=lambda v: utils.format_duration(v)[0],
+                transform=lambda v, p: utils.format_duration(v)[0],
                 color_key=lambda v: utils.format_duration(v)[1],
             )
         if Flag.TYPE & flag:
             add_column(
                 key="type",
                 name="TYPE",
-                min_width=16,
-                max_width=16,
                 justify="right",
             )
         if Flag.USER & flag:
             add_column(
                 key="user",
                 name="USER",
-                min_width=16,
-                max_width=16,
                 justify="right",
             )
         if Flag.WAIT & flag:
             add_column(
                 key="wait",
                 name="Waiting",
-                min_width=16,
-                max_width=16,
                 justify="right",
-                transform=utils.wait_status,
+                transform=lambda v, p: utils.wait_status(v),
                 color_key=colors.wait,
             )
         if Flag.WRITE & flag:
             add_column(
                 key="write",
                 name="WRITE/s",
-                min_width=8,
                 sort_key=SortKey.write,
-                transform=utils.naturalsize,
+                transform=lambda v, p: utils.naturalsize(v),
             )
 
         columns_key_by_querymode: Mapping[QueryMode, List[str]] = {
@@ -1137,12 +1074,3 @@ class SelectableProcesses:
             self.pinned.remove(self.focused)
         except KeyError:
             self.pinned.add(self.focused)
-
-
-ActivityStats = Union[
-    Iterable[WaitingProcess],
-    Iterable[RunningProcess],
-    Tuple[Iterable[WaitingProcess], SystemInfo],
-    Tuple[Iterable[BlockingProcess], SystemInfo],
-    Tuple[Iterable[LocalRunningProcess], SystemInfo],
-]

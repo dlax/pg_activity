@@ -6,6 +6,7 @@ from optparse import OptionParser, OptionGroup
 
 from blessed import Terminal
 from psycopg2.errors import OperationalError
+from rich.console import Console
 
 from . import __version__, data, types, ui
 
@@ -307,9 +308,10 @@ def main() -> None:
     )
 
     term = Terminal()
+    console = Console()
     while True:
         try:
-            ui.main(term, dataobj, host, options, dsn)
+            ui.main(term, console, dataobj, host, options, dsn)
         except OperationalError:
             while True:
                 print(term.clear + term.home, end="")

@@ -43,6 +43,7 @@ setup(
         "blessed",
         "humanize",
         "psutil >= 2.0.0",
+        "rich",
     ],
     extras_require={
         "dev": [
