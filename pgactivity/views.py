@@ -170,6 +170,8 @@ def header(
     server_information: ServerInformation,
     system_info: Optional[SystemInfo] = None,
 ) -> Iterator[str]:
+    """Return window header lines."""
+
     @functools.singledispatch
     def render(x: Any) -> str:
         if x is None:
@@ -218,7 +220,6 @@ def header(
 
     si = server_information
 
-    """Return window header lines."""
     pg_host = f"{host.user}@{host.host}:{host.port}/{host.dbname}"
     yield (
         " - ".join(
