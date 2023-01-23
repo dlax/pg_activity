@@ -10,6 +10,7 @@ include .coveragerc
 include .flake8
 include .requirements*
 include mypy.ini
+include pyoxidizer.bzl
 include pyproject.toml
 include pytest.ini
 include tox.ini
