@@ -3,14 +3,51 @@ import os
 import socket
 import sys
 import time
-from argparse import ArgumentParser
+from argparse import Action, ArgumentError, ArgumentParser, Namespace
 from io import StringIO
-from typing import Optional
+from typing import Any, Callable, Optional, Tuple, TypeVar
 
 from blessed import Terminal
 
 from . import __version__, data, types, ui
 from .pg import OperationalError
+
+T = TypeVar("T")
+
+
+def as_tuple(
+    type_: Callable[[str], T], sep: str = ":"
+) -> Callable[[str], Tuple[str, T]]:
+    """Factory for 'type' argument of ArgumentParser.add_argument()."""
+
+    def convert(value: str) -> Tuple[str, T]:
+        k, v = value.split(sep, 1)
+        return k.lower(), type_(v)
+
+    return convert
+
+
+class AppendUniqueKeyAction(Action):
+    """Action checking that tuple values have a unique first item."""
+
+    def __call__(
+        self,
+        parser: ArgumentParser,
+        namespace: Namespace,
+        values: Any = None,
+        option_string: Optional[str] = None,
+    ) -> None:
+        if values is None:
+            return
+        assert (
+            isinstance(values, tuple) and len(values) == 2
+        ), f"expecting a 2-tuple, got {values}"
+        k, _ = values
+        items = getattr(namespace, self.dest) or []
+        if any(k == i[0] for i in items):
+            raise ArgumentError(self, f"duplicated option {option_string}={k}")
+        items.append(values)
+        setattr(namespace, self.dest, items)
 
 
 def configure_logger(debug_file: Optional[str] = None) -> StringIO:
@@ -222,7 +259,7 @@ def get_parser() -> ArgumentParser:
 
     group = parser.add_argument_group(
         "Process table display options",
-        "These options may be used hide some columns from the processes table.",
+        "These options may be used to configure columns of the processes table.",
     )
     # --no-pid
     group.add_argument(
@@ -311,6 +348,15 @@ def get_parser() -> ArgumentParser:
         action="store_true",
         help="Disable App.",
         default=False,
+    )
+    # --width
+    group.add_argument(
+        "--width",
+        dest="widths",
+        help="Set the width of a column. For example: --width=client:43 --width=database:6",
+        metavar="COLUMN:WIDTH",
+        action=AppendUniqueKeyAction,
+        type=as_tuple(int),
     )
 
     group = parser.add_argument_group("Other display options")
