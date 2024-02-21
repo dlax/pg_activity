@@ -3,6 +3,8 @@ from __future__ import annotations
 import configparser
 import enum
 import os
+import types
+import typing
 from pathlib import Path
 from typing import IO, Any, Dict, TypeVar, Union
 
@@ -163,65 +165,79 @@ class Flag(enum.Flag):
         return flag
 
 
-class BaseSectionMixin:
-    @classmethod
-    def check_options(
-        cls: type[attr.AttrsInstance], section: configparser.SectionProxy
-    ) -> list[str]:
-        """Check that items of 'section' conform to known attributes of this class and
-        return the list of know options.
-        """
-        known_options = {f.name for f in attr.fields(cls)}
-        unknown_options = set(section) - set(known_options)
-        if unknown_options:
-            raise ValueError(f"invalid option(s): {', '.join(sorted(unknown_options))}")
-        return list(sorted(known_options))
+_T = TypeVar("_T", bound=attr.AttrsInstance)
+
+
+def parse_config_section_as(typ: type[_T], section: configparser.SectionProxy) -> _T:
+    """Parse a configparser section into specified type.
+
+    >>> @attr.define
+    ... class Obj:
+    ...     name: str
+    ...     x: int | None = None
+    ...     y: float = 0.0
+    ...     flag: bool = False
+
+    >>> config = configparser.ConfigParser()
+    >>> config['fst'] = {'x': 1, 'y': '1.2', 'name': 'foo', 'flag': 'yes'}
+    >>> config['snd'] = {'x': 0, 'name': 'bar'}
+    >>> config['trd'] = {'name': 'baz'}
+    >>> config['bad'] = {'name': 'bad', 'x': 'z'}
+
+    >>> parse_config_section_as(Obj, config['fst'])
+    Obj(name='foo', x=1, y=1.2, flag=True)
+    >>> parse_config_section_as(Obj, config['snd'])
+    Obj(name='bar', x=0, y=0.0, flag=False)
+    >>> parse_config_section_as(Obj, config['trd'])
+    Obj(name='baz', x=None, y=0.0, flag=False)
+    >>> parse_config_section_as(Obj, config['bad'])
+    Traceback (most recent call last):
+        ...
+    ValueError: invalid literal for int | None: 'z'
+    """
+    known_options = [f.name for f in attr.fields(typ)]
+    unknown_options = set(section) - set(known_options)
+    if unknown_options:
+        raise ValueError(f"invalid option(s): {', '.join(sorted(unknown_options))}")
+    values: dict[str, bool] = {}
+    hints = typing.get_type_hints(typ)
+    for optname in known_options:
+        try:
+            value = section.get(optname)
+        except configparser.NoOptionError:
+            continue
+        if value is not None:
+            opttype = orig_opttype = hints[optname]
+            if isinstance(opttype, types.UnionType):
+                opttypes = [
+                    a for a in typing.get_args(opttype) if a is not types.NoneType
+                ]
+                for opttype in opttypes:
+                    try:
+                        value = opttype(value)
+                    except ValueError:
+                        continue
+                    else:
+                        break
+                else:
+                    raise ValueError(f"invalid literal for {orig_opttype!r}: {value!r}")
+            else:
+                value = opttype(value)
+            values[optname] = value
+    return typ(**values)
 
 
 @attr.s(auto_attribs=True, frozen=True, slots=True)
-class HeaderSection(BaseSectionMixin):
+class HeaderSection:
     show_instance: bool = True
     show_system: bool = True
     show_workers: bool = True
 
-    _T = TypeVar("_T", bound="HeaderSection")
-
-    @classmethod
-    def from_config_section(cls: type[_T], section: configparser.SectionProxy) -> _T:
-        values: dict[str, bool] = {}
-        for optname in cls.check_options(section):
-            try:
-                value = section.getboolean(optname)
-            except configparser.NoOptionError:
-                continue
-            if value is not None:
-                values[optname] = value
-        return cls(**values)
-
 
 @attr.s(auto_attribs=True, frozen=True, slots=True)
-class UISection(BaseSectionMixin):
+class UISection:
     hidden: bool = False
     width: int | None = attr.ib(default=None, validator=validators.optional(gt(0)))
-
-    _T = TypeVar("_T", bound="UISection")
-
-    @classmethod
-    def from_config_section(cls: type[_T], section: configparser.SectionProxy) -> _T:
-        cls.check_options(section)
-        values: dict[str, Any] = {}
-        try:
-            hidden = section.getboolean("hidden")
-        except configparser.NoOptionError:
-            pass
-        else:
-            if hidden is not None:
-                values["hidden"] = hidden
-        try:
-            values["width"] = section.getint("width")
-        except configparser.NoOptionError:
-            pass
-        return cls(**values)
 
 
 USER_CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -271,7 +287,7 @@ class Configuration(Dict[str, Union[HeaderSection, UISection]]):
         >>> Configuration.parse(bad, "bad.ini")
         Traceback (most recent call last):
           ...
-        pgactivity.config.InvalidOptions: invalid configuration 'bad.ini': invalid option(s) in 'mem': invalid literal for int() with base 10: 'xyz'
+        pgactivity.config.InvalidOptions: invalid configuration 'bad.ini': invalid option(s) in 'mem': invalid literal for int | None: 'xyz'
         >>> bad = StringIO("not some INI??")
         >>> Configuration.parse(bad, "bad.txt")
         Traceback (most recent call last):
@@ -293,12 +309,12 @@ class Configuration(Dict[str, Union[HeaderSection, UISection]]):
                     raise InvalidSection(p.default_section, name)
                 continue
             if sname == "header":
-                config[sname] = HeaderSection.from_config_section(section)
+                config[sname] = parse_config_section_as(HeaderSection, section)
                 continue
             if sname not in known_sections:
                 raise InvalidSection(sname, name)
             try:
-                config[sname] = UISection.from_config_section(section)
+                config[sname] = parse_config_section_as(UISection, section)
             except ValueError as e:
                 raise InvalidOptions(sname, str(e), name) from None
         return cls(**config)
